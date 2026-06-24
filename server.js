@@ -1,6 +1,7 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
+const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
 const Record = require('./models/Record');
@@ -17,12 +18,31 @@ mongoose.connect(process.env.MONGODB_URI)
     .then(() => console.log('✅ Securely Connected to MongoDB Atlas'))
     .catch((err) => console.error('❌ MongoDB Connection Error:', err));
 
+// ==========================================
+// SYSTEM SECURITY CONSTANTS
+// ==========================================
+const JWT_SECRET = process.env.JWT_SECRET || 'VerifyHub_Elite_Security_Key_2026';
+const otpStorage = new Map();
 
 // ==========================================
-// SECURE OTP STORAGE (In-Memory)
+// ZERO-TRUST MIDDLEWARE (Data Protector)
 // ==========================================
-// Holds OTP records for 5 minutes: { "samshaad365": { otp: "123456", expiresAt: 1718000000 } }
-const otpStorage = new Map();
+const authenticateToken = (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1]; // Extracts "Bearer <token>"
+    
+    if (!token) {
+        return res.status(401).json({ success: false, message: 'Access Denied: Missing Security Token!' });
+    }
+
+    jwt.verify(token, JWT_SECRET, (err, user) => {
+        if (err) {
+            return res.status(403).json({ success: false, message: 'Token Corrupted or Expired! Forced Logout.' });
+        }
+        req.user = user;
+        next();
+    });
+};
 
 // ==========================================
 // 1. SECURE SERVER-SIDE LOGIN ROUTE (Trigger OTP)
@@ -32,17 +52,14 @@ app.post('/api/auth/login', async (req, res) => {
     
     if (username === process.env.ADMIN_USERNAME && password === process.env.ADMIN_PASS) {
         
-        // Generate 6-digit OTP
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
         
-        // Store in memory with 5-minute expiry
         otpStorage.set(username, {
             otp: otp,
             expiresAt: Date.now() + 5 * 60 * 1000 
         });
 
         try {
-            // Backend internally calls Vercel Proxy to hide API Keys from Android App
             const vercelRes = await fetch('https://email-testtt.vercel.app/api/send-email', {
                 method: 'POST',
                 headers: {
@@ -72,7 +89,7 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 // ==========================================
-// 2. VERIFY OTP ROUTE
+// 2. VERIFY OTP ROUTE (Generate JWT)
 // ==========================================
 app.post('/api/auth/verify-otp', (req, res) => {
     const { username, otp } = req.body;
@@ -88,17 +105,22 @@ app.post('/api/auth/verify-otp', (req, res) => {
     }
 
     if (storedData.otp === otp) {
-        otpStorage.delete(username); // Clear after successful login
-        res.status(200).json({ success: true, message: "Authentication complete. Access Granted." });
+        otpStorage.delete(username); 
+        
+        // Elite Security: Generate Encrypted JWT valid for 7 Days
+        const token = jwt.sign({ username: username, role: 'admin' }, JWT_SECRET, { expiresIn: '7d' });
+        
+        res.status(200).json({ 
+            success: true, 
+            message: "Authentication complete. Access Granted.",
+            token: token // Sending token to Android App
+        });
     } else {
         res.status(401).json({ success: false, message: "Invalid OTP. Access Denied." });
     }
 });
 
-// ==========================================
-// 3. SYSTEM TEST EMAIL ROUTE (For App Settings)
-// ==========================================
-app.post('/api/test-email', async (req, res) => {
+app.post('/api/test-email', authenticateToken, async (req, res) => {
     const { to, otp } = req.body;
     try {
         const vercelRes = await fetch('https://email-testtt.vercel.app/api/send-email', {
@@ -127,10 +149,10 @@ app.post('/api/test-email', async (req, res) => {
 
 
 // ==========================================
-// REST API ROUTES FOR VERIFYHUB RECORDS
+// PROTECTED REST API ROUTES (Requires JWT)
 // ==========================================
 
-app.get('/api/records', async (req, res) => {
+app.get('/api/records', authenticateToken, async (req, res) => {
     try {
         const records = await Record.find().sort({ createdAt: -1 });
         res.status(200).json(records);
@@ -139,7 +161,7 @@ app.get('/api/records', async (req, res) => {
     }
 });
 
-app.post('/api/records', async (req, res) => {
+app.post('/api/records', authenticateToken, async (req, res) => {
     try {
         const newRecord = new Record(req.body);
         const savedRecord = await newRecord.save();
@@ -150,7 +172,7 @@ app.post('/api/records', async (req, res) => {
     }
 });
 
-app.put('/api/records/:id', async (req, res) => {
+app.put('/api/records/:id', authenticateToken, async (req, res) => {
     try {
         const updatedRecord = await Record.findOneAndUpdate({ id: req.params.id }, req.body, { new: true, runValidators: true });
         if (!updatedRecord) return res.status(404).json({ message: "Record not found" });
@@ -160,7 +182,7 @@ app.put('/api/records/:id', async (req, res) => {
     }
 });
 
-app.delete('/api/records/:id', async (req, res) => {
+app.delete('/api/records/:id', authenticateToken, async (req, res) => {
     try {
         const deletedRecord = await Record.findOneAndDelete({ id: req.params.id });
         if (!deletedRecord) return res.status(404).json({ message: "Record not found" });
@@ -170,7 +192,6 @@ app.delete('/api/records/:id', async (req, res) => {
     }
 });
 
-// Status Page
 app.get('/', (req, res) => {
     res.send('<h1>VerifyHub API</h1><p>Secure routing and backend services are operational.</p>');
 });
