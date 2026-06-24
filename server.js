@@ -9,7 +9,7 @@ const app = express();
 
 // Middleware
 app.use(cors()); 
-app.use(express.json()); 
+app.use(express.json());
 
 // ==========================================
 // MONGODB CONNECTION
@@ -134,6 +134,17 @@ app.get('/', (req, res) => {
     res.send(statusPageHTML);
 });
 
+// ==========================================
+// SECURE SERVER-SIDE LOGIN ROUTE
+// ==========================================
+app.post('/api/auth/login', (req, res) => {
+    const { username, password } = req.body;
+    if (username === process.env.ADMIN_USERNAME && password === process.env.ADMIN_PASS) {
+        res.status(200).json({ success: true, message: "Authentication successful" });
+    } else {
+        res.status(401).json({ success: false, message: "Invalid credentials. Access denied." });
+    }
+});
 
 // ==========================================
 // REST API ROUTES FOR VERIFYHUB
