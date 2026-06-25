@@ -16,20 +16,47 @@ app.use(cors());
 app.use(express.json());
 
 // ==========================================
-// FIREBASE ADMIN INITIALIZATION
+// FIREBASE ADMIN INITIALIZATION (via ENV)
 // ==========================================
+let firebaseInitialized = false;
 try {
-    const serviceAccount = require('./serviceAccountKey.json');
+    const base64Key = process.env.FIREBASE_SERVICE_ACCOUNT_BASE64;
+    if (!base64Key) {
+        throw new Error('FIREBASE_SERVICE_ACCOUNT_BASE64 environment variable is not set or empty.');
+    }
+
+    console.log(`🔑 Base64 key length: ${base64Key.length} characters`);
+
+    // Decode Base64 → JSON string
+    const jsonString = Buffer.from(base64Key, 'base64').toString('utf-8');
+    console.log('✅ Base64 decoded successfully, parsing JSON...');
+
+    // Validate that it's valid JSON
+    let serviceAccount;
+    try {
+        serviceAccount = JSON.parse(jsonString);
+    } catch (parseErr) {
+        throw new Error(`Decoded string is not valid JSON. Please ensure you have Base64-encoded the service account JSON. Error: ${parseErr.message}`);
+    }
+
     admin.initializeApp({
         credential: admin.credential.cert(serviceAccount)
     });
-    console.log('✅ Firebase Admin Engine Initialized');
+    firebaseInitialized = true;
+    console.log('✅ Firebase Admin Engine Initialized via ENV');
 } catch (error) {
-    console.error('⚠️ Firebase Init Error: serviceAccountKey.json missing or invalid.');
+    console.error('❌ Firebase Init Error:', error.message);
+    console.error('💡 Please ensure FIREBASE_SERVICE_ACCOUNT_BASE64 contains the correct Base64-encoded JSON key.');
+    console.error('   Generate it with: cat serviceAccountKey.json | base64 -w 0');
+    console.error('   Then paste the entire output into the environment variable.');
 }
 
-// Push Notification Sender Function
+// Push Notification Sender Function (only works if Firebase is initialized)
 const sendPushNotification = async (title, body) => {
+    if (!firebaseInitialized) {
+        console.warn('⚠️ Firebase not initialized. Notification not sent.');
+        return;
+    }
     try {
         const payload = {
             notification: { title, body },
@@ -37,8 +64,10 @@ const sendPushNotification = async (title, body) => {
         };
         await admin.messaging().send(payload);
         console.log(`📤 Push Notification Sent: ${title}`);
+        return true;
     } catch (error) {
         console.error('❌ Error sending push notification:', error);
+        throw error;
     }
 };
 
@@ -127,7 +156,7 @@ const sanitizeRecord = (doc) => {
 // ==========================================
 const authenticateToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1]; // Extracts "Bearer <token>"
+    const token = authHeader && authHeader.split(' ')[1];
     
     if (!token) {
         return res.status(401).json({ success: false, message: 'Access Denied: Missing Security Token!' });
@@ -205,13 +234,12 @@ app.post('/api/auth/verify-otp', (req, res) => {
     if (storedData.otp === otp) {
         otpStorage.delete(username); 
         
-        // Elite Security: Generate Encrypted JWT valid for 7 Days
         const token = jwt.sign({ username: username, role: 'admin' }, JWT_SECRET, { expiresIn: '7d' });
         
         res.status(200).json({ 
             success: true, 
             message: "Authentication complete. Access Granted.",
-            token: token // Sending token to Android App
+            token: token
         });
     } else {
         res.status(401).json({ success: false, message: "Invalid OTP. Access Denied." });
@@ -263,7 +291,6 @@ app.post('/api/records', authenticateToken, async (req, res) => {
         const newRecord = new Record(req.body);
         const savedRecord = await newRecord.save();
         
-        // TRIGGER FIREBASE PUSH NOTIFICATION ON NEW ENTRY
         sendPushNotification(
             "New Entry Saved ✨",
             `${savedRecord.customerName} (${savedRecord.transactionType}) has been securely saved.`
@@ -293,6 +320,27 @@ app.delete('/api/records/:id', authenticateToken, async (req, res) => {
         res.status(200).json({ message: "Record deleted successfully" });
     } catch (error) {
         res.status(500).json({ message: "Server Error: Unable to delete record", error: error.message });
+    }
+});
+
+// ==========================================
+// TEST NOTIFICATION ROUTE
+// ==========================================
+app.post('/api/test-notification', authenticateToken, async (req, res) => {
+    if (!firebaseInitialized) {
+        return res.status(503).json({ 
+            success: false, 
+            message: 'Firebase is not initialized. Please check FIREBASE_SERVICE_ACCOUNT_BASE64.' 
+        });
+    }
+    try {
+        const { title, body } = req.body;
+        const notifTitle = title || 'Test Notification';
+        const notifBody = body || 'This is a test push notification from VerifyHub.';
+        await sendPushNotification(notifTitle, notifBody);
+        res.status(200).json({ success: true, message: 'Test notification sent successfully.' });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Failed to send test notification.', error: error.message });
     }
 });
 
