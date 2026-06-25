@@ -4,12 +4,43 @@ const cors = require('cors');
 const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
+// Firebase and Cron imports
+const admin = require('firebase-admin');
+const cron = require('node-cron');
+
 const Record = require('./models/Record');
 
 const app = express();
 
 app.use(cors()); 
 app.use(express.json());
+
+// ==========================================
+// FIREBASE ADMIN INITIALIZATION
+// ==========================================
+try {
+    const serviceAccount = require('./serviceAccountKey.json');
+    admin.initializeApp({
+        credential: admin.credential.cert(serviceAccount)
+    });
+    console.log('✅ Firebase Admin Engine Initialized');
+} catch (error) {
+    console.error('⚠️ Firebase Init Error: serviceAccountKey.json missing or invalid.');
+}
+
+// Push Notification Sender Function
+const sendPushNotification = async (title, body) => {
+    try {
+        const payload = {
+            notification: { title, body },
+            topic: 'admin_alerts' 
+        };
+        await admin.messaging().send(payload);
+        console.log(`📤 Push Notification Sent: ${title}`);
+    } catch (error) {
+        console.error('❌ Error sending push notification:', error);
+    }
+};
 
 // ==========================================
 // MONGODB CONNECTION
@@ -23,6 +54,73 @@ mongoose.connect(process.env.MONGODB_URI)
 // ==========================================
 const JWT_SECRET = process.env.JWT_SECRET || 'VerifyHub_Elite_Security_Key_2026';
 const otpStorage = new Map();
+
+// ==========================================
+// CRON JOB: DAILY SMART ALERTS (09:00 AM IST)
+// ==========================================
+cron.schedule('0 9 * * *', async () => {
+    console.log('⏰ Running Daily Background Notification Check...');
+    
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+
+    try {
+        const records = await Record.find({ status: { $regex: new RegExp("^pending$", "i") } });
+        
+        let activationCount = 0;
+        let verificationCount = 0;
+
+        records.forEach(record => {
+            if (record.activationDate && record.activationDate.startsWith(today)) activationCount++;
+            if (record.verificationDueDate && record.verificationDueDate.startsWith(today)) verificationCount++;
+        });
+
+        if (activationCount > 0) {
+            sendPushNotification(
+                "Activations Today 🚀", 
+                `You have ${activationCount} connection(s) scheduled to activate today!`
+            );
+        }
+
+        if (verificationCount > 0) {
+            sendPushNotification(
+                "Verification Due ✅", 
+                `You have ${verificationCount} customer(s) eligible for verification today!`
+            );
+        }
+    } catch (error) {
+        console.error('❌ Cron Job Database Error:', error);
+    }
+}, {
+    scheduled: true,
+    timezone: "Asia/Kolkata"
+});
+
+// ==========================================
+// ELITE SANITIZER: GUARANTEES 0% ANDROID CRASH
+// ==========================================
+const sanitizeRecord = (doc) => {
+    const raw = doc.toObject ? doc.toObject() : doc;
+    return {
+        id: String(raw.id || (raw._id ? raw._id.toString() : "")),
+        transactionType: String(raw.transactionType || ""),
+        primaryType: String(raw.primaryType || ""),
+        phoneNumber: String(raw.phoneNumber || ""),
+        customerName: String(raw.customerName || ""),
+        date: String(raw.date || ""),
+        activationDate: String(raw.activationDate || ""),
+        verificationDueDate: String(raw.verificationDueDate || ""),
+        status: String(raw.status || "Pending"),
+        planValue: String(raw.planValue || ""),
+        billDate: String(raw.billDate || ""),
+        lastCallReason: String(raw.lastCallReason || ""),
+        remarks: String(raw.remarks || ""),
+        secondaryData: String(raw.secondaryData || "[]"), 
+        upcCode: String(raw.upcCode || ""),
+        gender: String(raw.gender || ""),
+        paidMonths: String(raw.paidMonths || ""),
+        groupId: String(raw.groupId || "")
+    };
+};
 
 // ==========================================
 // ZERO-TRUST MIDDLEWARE (Data Protector)
@@ -147,7 +245,6 @@ app.post('/api/test-email', authenticateToken, async (req, res) => {
     }
 });
 
-
 // ==========================================
 // PROTECTED REST API ROUTES (Requires JWT)
 // ==========================================
@@ -155,7 +252,7 @@ app.post('/api/test-email', authenticateToken, async (req, res) => {
 app.get('/api/records', authenticateToken, async (req, res) => {
     try {
         const records = await Record.find().sort({ createdAt: -1 });
-        res.status(200).json(records);
+        res.status(200).json(records.map(sanitizeRecord));
     } catch (error) {
         res.status(500).json({ message: "Server Error: Unable to fetch records", error: error.message });
     }
@@ -165,7 +262,14 @@ app.post('/api/records', authenticateToken, async (req, res) => {
     try {
         const newRecord = new Record(req.body);
         const savedRecord = await newRecord.save();
-        res.status(201).json(savedRecord);
+        
+        // TRIGGER FIREBASE PUSH NOTIFICATION ON NEW ENTRY
+        sendPushNotification(
+            "New Entry Saved ✨",
+            `${savedRecord.customerName} (${savedRecord.transactionType}) has been securely saved.`
+        );
+
+        res.status(201).json(sanitizeRecord(savedRecord));
     } catch (error) {
         if (error.code === 11000) return res.status(400).json({ message: "Record with this ID already exists." });
         res.status(500).json({ message: "Server Error: Unable to save record", error: error.message });
@@ -176,7 +280,7 @@ app.put('/api/records/:id', authenticateToken, async (req, res) => {
     try {
         const updatedRecord = await Record.findOneAndUpdate({ id: req.params.id }, req.body, { new: true, runValidators: true });
         if (!updatedRecord) return res.status(404).json({ message: "Record not found" });
-        res.status(200).json(updatedRecord);
+        res.status(200).json(sanitizeRecord(updatedRecord));
     } catch (error) {
         res.status(500).json({ message: "Server Error: Unable to update record", error: error.message });
     }
