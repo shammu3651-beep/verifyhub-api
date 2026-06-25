@@ -192,8 +192,46 @@ app.delete('/api/records/:id', authenticateToken, async (req, res) => {
     }
 });
 
+// ==========================================
+// FRONTEND STATUS PAGE (Root Route)
+// ==========================================
 app.get('/', (req, res) => {
-    res.send('<h1>VerifyHub API</h1><p>Secure routing and backend services are operational.</p>');
+    const statusPageHTML = `
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>VerifyHub - System Status</title>
+        <style>
+            body { margin: 0; padding: 0; font-family: 'Inter', sans-serif; background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); color: #f8fafc; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; }
+            .glass-container { text-align: center; background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); padding: 50px 40px; border-radius: 24px; box-shadow: 0 20px 40px rgba(0,0,0,0.4); border: 1px solid rgba(255, 255, 255, 0.1); max-width: 400px; width: 100%; }
+            .logo-placeholder { width: 60px; height: 60px; background: linear-gradient(135deg, #3b82f6, #4f46e5); border-radius: 16px; display: inline-flex; justify-content: center; align-items: center; margin-bottom: 20px; font-size: 28px; font-weight: 900; color: white; box-shadow: 0 10px 20px rgba(79, 70, 229, 0.3); }
+            h1 { margin: 0 0 10px; font-size: 2rem; font-weight: 800; color: #e2e8f0; }
+            p { color: #94a3b8; font-size: 1rem; margin-bottom: 30px; }
+            .status-badge { display: inline-flex; align-items: center; background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); padding: 10px 20px; border-radius: 50px; color: #10b981; font-weight: 700; }
+            .pulse { width: 10px; height: 10px; background: #10b981; border-radius: 50%; margin-right: 12px; box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); animation: pulse 2s infinite; }
+            @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(16, 185, 129, 0); } 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); } }
+            .system-info { margin-top: 30px; font-size: 0.8rem; color: #64748b; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 20px; }
+        </style>
+    </head>
+    <body>
+        <div class="glass-container">
+            <div class="logo-placeholder">V</div>
+            <h1>VerifyHub API</h1>
+            <p>Secure routing and backend services are operational.</p>
+            <div class="status-badge">
+                <div class="pulse"></div>
+                Services Chalu Hai 🚀
+            </div>
+            <div class="system-info">
+                System: Online | Environment: Production
+            </div>
+        </div>
+    </body>
+    </html>
+    `;
+    res.send(statusPageHTML);
 });
 
 const PORT = process.env.PORT || 5000;
