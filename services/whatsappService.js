@@ -1,4 +1,4 @@
-const { makeWASocket, DisconnectReason, initAuthCreds, BufferJSON } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, DisconnectReason, Browsers, initAuthCreds, BufferJSON } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const QRCode = require('qrcode');
 const BaileysAuth = require('../models/BaileysAuth');
@@ -30,14 +30,12 @@ const useMongoDBAuthState = async () => {
                             const value = data[category][id];
                             const key = `${category}-${id}`;
                             if (value) {
-                                // Update or Insert new keys
                                 await BaileysAuth.updateOne(
                                     { _id: key }, 
                                     { data: JSON.stringify(value, BufferJSON.replacer) }, 
                                     { upsert: true }
                                 );
                             } else {
-                                // 🔥 Smart Clean: Remove trash keys when they are no longer needed
                                 await BaileysAuth.deleteOne({ _id: key });
                             }
                         }
@@ -56,45 +54,58 @@ const useMongoDBAuthState = async () => {
 };
 
 const connectToWhatsApp = async () => {
-    const { state, saveCreds } = await useMongoDBAuthState();
+    try {
+        console.log('⏳ Initializing WhatsApp Engine...');
+        const { state, saveCreds } = await useMongoDBAuthState();
+        console.log('✅ MongoDB Auth State Loaded Successfully');
 
-    sock = makeWASocket({
-        auth: state,
-        printQRInTerminal: true, // Server logs me bhi QR dikhega
-        logger: pino({ level: 'silent' }), // Faltu logs hide karne ke liye
-        browser: ['VerifyHub', 'Chrome', '1.0.0']
-    });
+        sock = makeWASocket({
+            auth: state,
+            printQRInTerminal: true, 
+            logger: pino({ level: 'info' }), // 🔥 Set to info to see internal Baileys logs in Render
+            browser: Browsers.macOS('Desktop'), // 🔥 Anti-block fingerprinting
+            syncFullHistory: false // Keep DB light
+        });
 
-    sock.ev.on('creds.update', saveCreds);
+        sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect, qr } = update;
+        sock.ev.on('connection.update', async (update) => {
+            const { connection, lastDisconnect, qr } = update;
 
-        if (qr) {
-            console.log('🔄 New WhatsApp QR Generated');
-            currentQRBase64 = await QRCode.toDataURL(qr); // Convert to base64 for Android App
-        }
-
-        if (connection === 'close') {
-            isConnected = false;
-            const statusCode = lastDisconnect?.error?.output?.statusCode;
-            
-            if (statusCode !== DisconnectReason.loggedOut) {
-                console.log('⚠️ WhatsApp Connection Closed. Reconnecting...');
-                connectToWhatsApp();
-            } else {
-                console.log('🚫 WhatsApp Logged Out! Wiping Session Data from MongoDB...');
-                // 🔥 SMART CLEANING: Poora session kachra MongoDB se saaf
-                await BaileysAuth.deleteMany({});
-                currentQRBase64 = null;
-                connectToWhatsApp(); // Naya QR generate karne ke liye restart
+            if (qr) {
+                console.log('🔄 New WhatsApp QR String Received from WhatsApp Servers!');
+                try {
+                    currentQRBase64 = await QRCode.toDataURL(qr); 
+                    console.log('✅ QR Code Base64 Encoded for Android App');
+                } catch (qrErr) {
+                    console.error('❌ Failed to encode QR:', qrErr);
+                }
             }
-        } else if (connection === 'open') {
-            console.log('✅ WhatsApp Web Successfully Connected!');
-            isConnected = true;
-            currentQRBase64 = null;
-        }
-    });
+
+            if (connection === 'close') {
+                isConnected = false;
+                const statusCode = lastDisconnect?.error?.output?.statusCode;
+                console.log(`⚠️ WhatsApp Connection Closed. Code: ${statusCode}`);
+                
+                if (statusCode !== DisconnectReason.loggedOut) {
+                    console.log('🔄 Attempting Reconnect in 3 seconds...');
+                    setTimeout(connectToWhatsApp, 3000);
+                } else {
+                    console.log('🚫 WhatsApp Logged Out! Wiping Session Data from MongoDB...');
+                    await BaileysAuth.deleteMany({});
+                    currentQRBase64 = null;
+                    setTimeout(connectToWhatsApp, 3000);
+                }
+            } else if (connection === 'open') {
+                console.log('✅ WhatsApp Web Successfully Connected!');
+                isConnected = true;
+                currentQRBase64 = null;
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ CRITICAL ERROR in WhatsApp Engine:', error);
+    }
 };
 
 const getWhatsAppStatus = () => {
