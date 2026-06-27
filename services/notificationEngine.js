@@ -34,9 +34,9 @@ const sendPush = async (title, body) => {
             android: {
                 priority: "high",
                 notification: {
-                    channelId: "verifyhub_elite_alerts", // 🔥 Connects perfectly with Android's custom sound channel
-                    sound: "verify_sound", // Fallback for some specific devices
-                    clickAction: "FLUTTER_NOTIFICATION_CLICK" // Standard flag to open app on tap
+                    channelId: "verifyhub_elite_alerts",
+                    sound: "verify_sound",
+                    clickAction: "FLUTTER_NOTIFICATION_CLICK"
                 }
             }
         });
@@ -75,8 +75,10 @@ const notifyNewRecord = (record) => {
 const notifyRecordUpdate = (oldRecord, newRecord) => {
     const name = newRecord.customerName || "Customer";
     const type = String(newRecord.transactionType || "").toUpperCase();
-    val oldStatus = String(oldRecord.status || "").toLowerCase();
-    val newStatus = String(newRecord.status || "").toLowerCase();
+    
+    // 🔥 FIX: 'val' replaced with 'const' for Node.js compatibility
+    const oldStatus = String(oldRecord.status || "").toLowerCase();
+    const newStatus = String(newRecord.status || "").toLowerCase();
 
     if (oldStatus !== 'active' && newStatus === 'active') {
         if (type.includes('MNP') || type.includes('PORT')) sendPush("MNP Activated 🎉", `${name} ka ported number active ho gaya hai!`);
