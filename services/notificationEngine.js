@@ -20,8 +20,27 @@ const initFirebase = () => {
 
 const sendPush = async (title, body) => {
     try {
-        await admin.messaging().send({ notification: { title, body }, topic: 'admin_alerts' });
-        console.log(`📤 Push Dispatched: ${title}`);
+        // 🔥 ELITE UPDATE: Added Android specific channel routing & data payload for background triggering
+        await admin.messaging().send({
+            topic: 'admin_alerts',
+            notification: { 
+                title, 
+                body 
+            },
+            data: {
+                title: String(title),
+                body: String(body)
+            },
+            android: {
+                priority: "high",
+                notification: {
+                    channelId: "verifyhub_elite_alerts", // 🔥 Connects perfectly with Android's custom sound channel
+                    sound: "verify_sound", // Fallback for some specific devices
+                    clickAction: "FLUTTER_NOTIFICATION_CLICK" // Standard flag to open app on tap
+                }
+            }
+        });
+        console.log(`📤 Elite Push Dispatched to verifyhub_elite_alerts: ${title}`);
     } catch (error) { console.error('❌ Push Failed:', error.message); }
 };
 
@@ -56,8 +75,8 @@ const notifyNewRecord = (record) => {
 const notifyRecordUpdate = (oldRecord, newRecord) => {
     const name = newRecord.customerName || "Customer";
     const type = String(newRecord.transactionType || "").toUpperCase();
-    const oldStatus = String(oldRecord.status || "").toLowerCase();
-    const newStatus = String(newRecord.status || "").toLowerCase();
+    val oldStatus = String(oldRecord.status || "").toLowerCase();
+    val newStatus = String(newRecord.status || "").toLowerCase();
 
     if (oldStatus !== 'active' && newStatus === 'active') {
         if (type.includes('MNP') || type.includes('PORT')) sendPush("MNP Activated 🎉", `${name} ka ported number active ho gaya hai!`);
