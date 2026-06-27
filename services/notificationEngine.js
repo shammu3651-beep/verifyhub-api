@@ -75,10 +75,8 @@ const notifyNewRecord = (record) => {
 const notifyRecordUpdate = (oldRecord, newRecord) => {
     const name = newRecord.customerName || "Customer";
     const type = String(newRecord.transactionType || "").toUpperCase();
-    
-    // 🔥 FIX: Replaced Kotlin's 'val' with JavaScript's 'const'
-    const oldStatus = String(oldRecord.status || "").toLowerCase();
-    const newStatus = String(newRecord.status || "").toLowerCase();
+    val oldStatus = String(oldRecord.status || "").toLowerCase();
+    val newStatus = String(newRecord.status || "").toLowerCase();
 
     if (oldStatus !== 'active' && newStatus === 'active') {
         if (type.includes('MNP') || type.includes('PORT')) sendPush("MNP Activated 🎉", `${name} ka ported number active ho gaya hai!`);
