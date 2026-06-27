@@ -7,14 +7,17 @@ require('dotenv').config();
 // 🔥 Explicitly requiring with .js extension to prevent Termux resolution issues
 const notificationEngine = require('./services/notificationEngine.js');
 const Record = require('./models/Record');
+const whatsappRoutes = require('./routes/whatsappRoutes.js');
+const { connectToWhatsApp } = require('./services/whatsappService.js');
 
 const app = express();
 app.use(cors()); 
 app.use(express.json());
 
-// Initialize Notifications and Cron Jobs
+// Initialize Notifications, Cron Jobs and WhatsApp Engine
 notificationEngine.initFirebase();
 notificationEngine.startCronJobs();
+connectToWhatsApp(); // 🔥 FIX: Baileys WhatsApp Engine boot kiya
 
 // ==========================================
 // MONGODB CONNECTION
@@ -157,6 +160,9 @@ app.delete('/api/records/:id', authenticateToken, async (req, res) => {
         res.status(200).json({ message: "Record deleted successfully" });
     } catch (error) { res.status(500).json({ message: "Server Error", error: error.message }); }
 });
+
+// 🔥 FIX: WhatsApp API Routes Mounted Here
+app.use('/api/whatsapp', whatsappRoutes);
 
 // ==========================================
 // FRONTEND STATUS PAGE (Clean UI)
