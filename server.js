@@ -4,72 +4,17 @@ const cors = require('cors');
 const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
-// Firebase and Cron imports
-const admin = require('firebase-admin');
-const cron = require('node-cron');
-
+// 🔥 Explicitly requiring with .js extension to prevent Termux resolution issues
+const notificationEngine = require('./services/notificationEngine.js');
 const Record = require('./models/Record');
 
 const app = express();
-
 app.use(cors()); 
 app.use(express.json());
 
-// ==========================================
-// FIREBASE ADMIN INITIALIZATION (via ENV)
-// ==========================================
-let firebaseInitialized = false;
-try {
-    const base64Key = process.env.FIREBASE_SERVICE_ACCOUNT_BASE64;
-    if (!base64Key) {
-        throw new Error('FIREBASE_SERVICE_ACCOUNT_BASE64 environment variable is not set or empty.');
-    }
-
-    console.log(`🔑 Base64 key length: ${base64Key.length} characters`);
-
-    // Decode Base64 → JSON string
-    const jsonString = Buffer.from(base64Key, 'base64').toString('utf-8');
-    console.log('✅ Base64 decoded successfully, parsing JSON...');
-
-    // Validate that it's valid JSON
-    let serviceAccount;
-    try {
-        serviceAccount = JSON.parse(jsonString);
-    } catch (parseErr) {
-        throw new Error(`Decoded string is not valid JSON. Please ensure you have Base64-encoded the service account JSON. Error: ${parseErr.message}`);
-    }
-
-    admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount)
-    });
-    firebaseInitialized = true;
-    console.log('✅ Firebase Admin Engine Initialized via ENV');
-} catch (error) {
-    console.error('❌ Firebase Init Error:', error.message);
-    console.error('💡 Please ensure FIREBASE_SERVICE_ACCOUNT_BASE64 contains the correct Base64-encoded JSON key.');
-    console.error('   Generate it with: cat serviceAccountKey.json | base64 -w 0');
-    console.error('   Then paste the entire output into the environment variable.');
-}
-
-// Push Notification Sender Function (only works if Firebase is initialized)
-const sendPushNotification = async (title, body) => {
-    if (!firebaseInitialized) {
-        console.warn('⚠️ Firebase not initialized. Notification not sent.');
-        return;
-    }
-    try {
-        const payload = {
-            notification: { title, body },
-            topic: 'admin_alerts' 
-        };
-        await admin.messaging().send(payload);
-        console.log(`📤 Push Notification Sent: ${title}`);
-        return true;
-    } catch (error) {
-        console.error('❌ Error sending push notification:', error);
-        throw error;
-    }
-};
+// Initialize Notifications and Cron Jobs
+notificationEngine.initFirebase();
+notificationEngine.startCronJobs();
 
 // ==========================================
 // MONGODB CONNECTION
@@ -78,54 +23,11 @@ mongoose.connect(process.env.MONGODB_URI)
     .then(() => console.log('✅ Securely Connected to MongoDB Atlas'))
     .catch((err) => console.error('❌ MongoDB Connection Error:', err));
 
-// ==========================================
-// SYSTEM SECURITY CONSTANTS
-// ==========================================
 const JWT_SECRET = process.env.JWT_SECRET || 'VerifyHub_Elite_Security_Key_2026';
 const otpStorage = new Map();
 
 // ==========================================
-// CRON JOB: DAILY SMART ALERTS (09:00 AM IST)
-// ==========================================
-cron.schedule('0 9 * * *', async () => {
-    console.log('⏰ Running Daily Background Notification Check...');
-    
-    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-
-    try {
-        const records = await Record.find({ status: { $regex: new RegExp("^pending$", "i") } });
-        
-        let activationCount = 0;
-        let verificationCount = 0;
-
-        records.forEach(record => {
-            if (record.activationDate && record.activationDate.startsWith(today)) activationCount++;
-            if (record.verificationDueDate && record.verificationDueDate.startsWith(today)) verificationCount++;
-        });
-
-        if (activationCount > 0) {
-            sendPushNotification(
-                "Activations Today 🚀", 
-                `You have ${activationCount} connection(s) scheduled to activate today!`
-            );
-        }
-
-        if (verificationCount > 0) {
-            sendPushNotification(
-                "Verification Due ✅", 
-                `You have ${verificationCount} customer(s) eligible for verification today!`
-            );
-        }
-    } catch (error) {
-        console.error('❌ Cron Job Database Error:', error);
-    }
-}, {
-    scheduled: true,
-    timezone: "Asia/Kolkata"
-});
-
-// ==========================================
-// ELITE SANITIZER: GUARANTEES 0% ANDROID CRASH
+// ELITE SANITIZER
 // ==========================================
 const sanitizeRecord = (doc) => {
     const raw = doc.toObject ? doc.toObject() : doc;
@@ -152,138 +54,68 @@ const sanitizeRecord = (doc) => {
 };
 
 // ==========================================
-// ZERO-TRUST MIDDLEWARE (Data Protector)
+// ZERO-TRUST MIDDLEWARE
 // ==========================================
 const authenticateToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
-    
-    if (!token) {
-        return res.status(401).json({ success: false, message: 'Access Denied: Missing Security Token!' });
-    }
+    const token = authHeader && authHeader.split(' ')[1]; 
+    if (!token) return res.status(401).json({ success: false, message: 'Access Denied: Missing Security Token!' });
 
     jwt.verify(token, JWT_SECRET, (err, user) => {
-        if (err) {
-            return res.status(403).json({ success: false, message: 'Token Corrupted or Expired! Forced Logout.' });
-        }
+        if (err) return res.status(403).json({ success: false, message: 'Token Corrupted or Expired!' });
         req.user = user;
         next();
     });
 };
 
 // ==========================================
-// 1. SECURE SERVER-SIDE LOGIN ROUTE (Trigger OTP)
+// AUTH ROUTES (For App Internal Use)
 // ==========================================
 app.post('/api/auth/login', async (req, res) => {
     const { username, password } = req.body;
-    
     if (username === process.env.ADMIN_USERNAME && password === process.env.ADMIN_PASS) {
-        
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
-        
-        otpStorage.set(username, {
-            otp: otp,
-            expiresAt: Date.now() + 5 * 60 * 1000 
-        });
+        otpStorage.set(username, { otp: otp, expiresAt: Date.now() + 5 * 60 * 1000 });
 
         try {
             const vercelRes = await fetch('https://email-testtt.vercel.app/api/send-email', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${process.env.VERCEL_EMAIL_API_KEY}`
-                },
-                body: JSON.stringify({
-                    to: process.env.ADMIN_EMAIL,
-                    subject: "VerifyHub Security - Login Access OTP",
-                    type: "otp",
-                    otp: otp
-                })
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.VERCEL_EMAIL_API_KEY}` },
+                body: JSON.stringify({ to: process.env.ADMIN_EMAIL, subject: "VerifyHub Security - Login Access OTP", type: "otp", otp: otp })
             });
-
-            if (vercelRes.ok) {
-                res.status(200).json({ success: true, message: `OTP successfully sent to admin email.` });
-            } else {
-                res.status(500).json({ success: false, message: "Server Error: Failed to dispatch OTP from mail gateway." });
-            }
+            if (vercelRes.ok) res.status(200).json({ success: true, message: `OTP successfully sent.` });
+            else res.status(500).json({ success: false, message: "Server Error: Failed to dispatch OTP." });
         } catch (error) {
-            console.error("Vercel Fetch Error:", error);
             res.status(500).json({ success: false, message: "Network Error: Mail gateway unreachable." });
         }
     } else {
-        res.status(401).json({ success: false, message: "Invalid credentials. Access denied." });
+        res.status(401).json({ success: false, message: "Invalid credentials." });
     }
 });
 
-// ==========================================
-// 2. VERIFY OTP ROUTE (Generate JWT)
-// ==========================================
 app.post('/api/auth/verify-otp', (req, res) => {
     const { username, otp } = req.body;
     const storedData = otpStorage.get(username);
-
-    if (!storedData) {
-        return res.status(400).json({ success: false, message: "No active OTP session found. Please login again." });
-    }
-
-    if (Date.now() > storedData.expiresAt) {
-        otpStorage.delete(username);
-        return res.status(400).json({ success: false, message: "OTP has expired. Please request a new one." });
-    }
+    if (!storedData) return res.status(400).json({ success: false, message: "No active OTP session found." });
+    if (Date.now() > storedData.expiresAt) return res.status(400).json({ success: false, message: "OTP has expired." });
 
     if (storedData.otp === otp) {
         otpStorage.delete(username); 
-        
         const token = jwt.sign({ username: username, role: 'admin' }, JWT_SECRET, { expiresIn: '7d' });
-        
-        res.status(200).json({ 
-            success: true, 
-            message: "Authentication complete. Access Granted.",
-            token: token
-        });
+        res.status(200).json({ success: true, message: "Access Granted.", token: token });
     } else {
-        res.status(401).json({ success: false, message: "Invalid OTP. Access Denied." });
-    }
-});
-
-app.post('/api/test-email', authenticateToken, async (req, res) => {
-    const { to, otp } = req.body;
-    try {
-        const vercelRes = await fetch('https://email-testtt.vercel.app/api/send-email', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${process.env.VERCEL_EMAIL_API_KEY}`
-            },
-            body: JSON.stringify({
-                to: to,
-                subject: "VerifyHub Security - System Test",
-                type: "otp",
-                otp: otp
-            })
-        });
-
-        if (vercelRes.ok) {
-            res.status(200).json({ success: true, message: "Test OTP delivered successfully." });
-        } else {
-            res.status(500).json({ success: false, message: "Failed: Vercel node rejected request." });
-        }
-    } catch (error) {
-        res.status(500).json({ success: false, message: "Network Exception: Email drop failed." });
+        res.status(401).json({ success: false, message: "Invalid OTP." });
     }
 });
 
 // ==========================================
-// PROTECTED REST API ROUTES (Requires JWT)
+// REST API ROUTES
 // ==========================================
-
 app.get('/api/records', authenticateToken, async (req, res) => {
     try {
         const records = await Record.find().sort({ createdAt: -1 });
         res.status(200).json(records.map(sanitizeRecord));
-    } catch (error) {
-        res.status(500).json({ message: "Server Error: Unable to fetch records", error: error.message });
-    }
+    } catch (error) { res.status(500).json({ message: "Server Error", error: error.message }); }
 });
 
 app.post('/api/records', authenticateToken, async (req, res) => {
@@ -291,26 +123,31 @@ app.post('/api/records', authenticateToken, async (req, res) => {
         const newRecord = new Record(req.body);
         const savedRecord = await newRecord.save();
         
-        sendPushNotification(
-            "New Entry Saved ✨",
-            `${savedRecord.customerName} (${savedRecord.transactionType}) has been securely saved.`
-        );
-
+        // 🔥 Trigger dynamic new record alert
+        notificationEngine.notifyNewRecord(savedRecord);
+        
         res.status(201).json(sanitizeRecord(savedRecord));
     } catch (error) {
-        if (error.code === 11000) return res.status(400).json({ message: "Record with this ID already exists." });
-        res.status(500).json({ message: "Server Error: Unable to save record", error: error.message });
+        if (error.code === 11000) return res.status(400).json({ message: "Record already exists." });
+        res.status(500).json({ message: "Server Error", error: error.message });
     }
 });
 
 app.put('/api/records/:id', authenticateToken, async (req, res) => {
     try {
+        // Fetch old record state before updating
+        const oldRecord = await Record.findOne({ id: req.params.id });
+        
         const updatedRecord = await Record.findOneAndUpdate({ id: req.params.id }, req.body, { new: true, runValidators: true });
         if (!updatedRecord) return res.status(404).json({ message: "Record not found" });
+
+        // 🔥 Trigger smart update alert (compares old vs new status)
+        if (oldRecord) {
+            notificationEngine.notifyRecordUpdate(oldRecord, updatedRecord);
+        }
+
         res.status(200).json(sanitizeRecord(updatedRecord));
-    } catch (error) {
-        res.status(500).json({ message: "Server Error: Unable to update record", error: error.message });
-    }
+    } catch (error) { res.status(500).json({ message: "Server Error", error: error.message }); }
 });
 
 app.delete('/api/records/:id', authenticateToken, async (req, res) => {
@@ -318,34 +155,11 @@ app.delete('/api/records/:id', authenticateToken, async (req, res) => {
         const deletedRecord = await Record.findOneAndDelete({ id: req.params.id });
         if (!deletedRecord) return res.status(404).json({ message: "Record not found" });
         res.status(200).json({ message: "Record deleted successfully" });
-    } catch (error) {
-        res.status(500).json({ message: "Server Error: Unable to delete record", error: error.message });
-    }
+    } catch (error) { res.status(500).json({ message: "Server Error", error: error.message }); }
 });
 
 // ==========================================
-// TEST NOTIFICATION ROUTE
-// ==========================================
-app.post('/api/test-notification', authenticateToken, async (req, res) => {
-    if (!firebaseInitialized) {
-        return res.status(503).json({ 
-            success: false, 
-            message: 'Firebase is not initialized. Please check FIREBASE_SERVICE_ACCOUNT_BASE64.' 
-        });
-    }
-    try {
-        const { title, body } = req.body;
-        const notifTitle = title || 'Test Notification';
-        const notifBody = body || 'This is a test push notification from VerifyHub.';
-        await sendPushNotification(notifTitle, notifBody);
-        res.status(200).json({ success: true, message: 'Test notification sent successfully.' });
-    } catch (error) {
-        res.status(500).json({ success: false, message: 'Failed to send test notification.', error: error.message });
-    }
-});
-
-// ==========================================
-// FRONTEND STATUS PAGE (Root Route)
+// FRONTEND STATUS PAGE (Clean UI)
 // ==========================================
 app.get('/', (req, res) => {
     const statusPageHTML = `
@@ -356,15 +170,16 @@ app.get('/', (req, res) => {
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>VerifyHub - System Status</title>
         <style>
+            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800;900&display=swap');
             body { margin: 0; padding: 0; font-family: 'Inter', sans-serif; background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); color: #f8fafc; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; }
-            .glass-container { text-align: center; background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); padding: 50px 40px; border-radius: 24px; box-shadow: 0 20px 40px rgba(0,0,0,0.4); border: 1px solid rgba(255, 255, 255, 0.1); max-width: 400px; width: 100%; }
+            .glass-container { text-align: center; background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); padding: 50px 40px; border-radius: 24px; box-shadow: 0 20px 40px rgba(0,0,0,0.4); border: 1px solid rgba(255, 255, 255, 0.1); max-width: 400px; width: 100%; box-sizing: border-box; }
             .logo-placeholder { width: 60px; height: 60px; background: linear-gradient(135deg, #3b82f6, #4f46e5); border-radius: 16px; display: inline-flex; justify-content: center; align-items: center; margin-bottom: 20px; font-size: 28px; font-weight: 900; color: white; box-shadow: 0 10px 20px rgba(79, 70, 229, 0.3); }
             h1 { margin: 0 0 10px; font-size: 2rem; font-weight: 800; color: #e2e8f0; }
-            p { color: #94a3b8; font-size: 1rem; margin-bottom: 30px; }
-            .status-badge { display: inline-flex; align-items: center; background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); padding: 10px 20px; border-radius: 50px; color: #10b981; font-weight: 700; }
+            p { color: #94a3b8; font-size: 1rem; margin-bottom: 30px; font-weight: 600; }
+            .status-badge { display: inline-flex; align-items: center; background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); padding: 10px 20px; border-radius: 50px; color: #10b981; font-weight: 800; }
             .pulse { width: 10px; height: 10px; background: #10b981; border-radius: 50%; margin-right: 12px; box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); animation: pulse 2s infinite; }
             @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(16, 185, 129, 0); } 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); } }
-            .system-info { margin-top: 30px; font-size: 0.8rem; color: #64748b; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 20px; }
+            .system-info { margin-top: 30px; font-size: 0.8rem; color: #64748b; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 20px; font-weight: 600; }
         </style>
     </head>
     <body>
