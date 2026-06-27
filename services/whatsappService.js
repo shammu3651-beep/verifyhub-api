@@ -1,4 +1,4 @@
-const { default: makeWASocket, DisconnectReason, Browsers, initAuthCreds, BufferJSON } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, DisconnectReason, Browsers, initAuthCreds, BufferJSON, useMultiFileAuthState } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const QRCode = require('qrcode');
 const BaileysAuth = require('../models/BaileysAuth');
@@ -59,12 +59,17 @@ const connectToWhatsApp = async () => {
         const { state, saveCreds } = await useMongoDBAuthState();
         console.log('✅ MongoDB Auth State Loaded Successfully');
 
+        // 🔥 FIX: Adjusted configuration for strict cloud environments
         sock = makeWASocket({
             auth: state,
             printQRInTerminal: true, 
-            logger: pino({ level: 'info' }), // 🔥 Set to info to see internal Baileys logs in Render
-            browser: Browsers.macOS('Desktop'), // 🔥 Anti-block fingerprinting
-            syncFullHistory: false // Keep DB light
+            logger: pino({ level: 'silent' }), // Reduce log spam unless debugging
+            browser: Browsers.ubuntu('Chrome'), // Ubuntu Chrome has a better bypass rate on servers
+            syncFullHistory: false,
+            generateHighQualityLinkPreview: false,
+            connectTimeoutMs: 60000,
+            keepAliveIntervalMs: 10000,
+            markOnlineOnConnect: false // Stay stealthy
         });
 
         sock.ev.on('creds.update', saveCreds);
@@ -87,14 +92,15 @@ const connectToWhatsApp = async () => {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
                 console.log(`⚠️ WhatsApp Connection Closed. Code: ${statusCode}`);
                 
-                if (statusCode !== DisconnectReason.loggedOut) {
-                    console.log('🔄 Attempting Reconnect in 3 seconds...');
-                    setTimeout(connectToWhatsApp, 3000);
-                } else {
-                    console.log('🚫 WhatsApp Logged Out! Wiping Session Data from MongoDB...');
+                // 🔥 FIX: Aggressive retry on 405 (Not Allowed/Blocked)
+                if (statusCode === 405 || statusCode === DisconnectReason.loggedOut) {
+                    console.log('🚫 WhatsApp Rejected Connection or Logged Out! Wiping Session Data from MongoDB...');
                     await BaileysAuth.deleteMany({});
                     currentQRBase64 = null;
-                    setTimeout(connectToWhatsApp, 3000);
+                    setTimeout(connectToWhatsApp, 5000); // 5 sec cooldown
+                } else {
+                    console.log('🔄 Attempting Reconnect in 5 seconds...');
+                    setTimeout(connectToWhatsApp, 5000);
                 }
             } else if (connection === 'open') {
                 console.log('✅ WhatsApp Web Successfully Connected!');
