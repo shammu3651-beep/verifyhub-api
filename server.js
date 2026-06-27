@@ -4,11 +4,12 @@ const cors = require('cors');
 const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
-// 🔥 Explicitly requiring with .js extension to prevent Termux resolution issues
+// 🔥 Modules Import
 const notificationEngine = require('./services/notificationEngine.js');
 const Record = require('./models/Record');
 const whatsappRoutes = require('./routes/whatsappRoutes.js');
 const { connectToWhatsApp } = require('./services/whatsappService.js');
+const authenticateToken = require('./middleware/auth.js'); // 🔥 Modular Auth Import
 
 const app = express();
 app.use(cors()); 
@@ -17,7 +18,7 @@ app.use(express.json());
 // Initialize Notifications, Cron Jobs and WhatsApp Engine
 notificationEngine.initFirebase();
 notificationEngine.startCronJobs();
-connectToWhatsApp(); // 🔥 FIX: Baileys WhatsApp Engine boot kiya
+connectToWhatsApp();
 
 // ==========================================
 // MONGODB CONNECTION
@@ -54,21 +55,6 @@ const sanitizeRecord = (doc) => {
         paidMonths: String(raw.paidMonths || ""),
         groupId: String(raw.groupId || "")
     };
-};
-
-// ==========================================
-// ZERO-TRUST MIDDLEWARE
-// ==========================================
-const authenticateToken = (req, res, next) => {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1]; 
-    if (!token) return res.status(401).json({ success: false, message: 'Access Denied: Missing Security Token!' });
-
-    jwt.verify(token, JWT_SECRET, (err, user) => {
-        if (err) return res.status(403).json({ success: false, message: 'Token Corrupted or Expired!' });
-        req.user = user;
-        next();
-    });
 };
 
 // ==========================================
@@ -138,13 +124,11 @@ app.post('/api/records', authenticateToken, async (req, res) => {
 
 app.put('/api/records/:id', authenticateToken, async (req, res) => {
     try {
-        // Fetch old record state before updating
         const oldRecord = await Record.findOne({ id: req.params.id });
-        
         const updatedRecord = await Record.findOneAndUpdate({ id: req.params.id }, req.body, { new: true, runValidators: true });
         if (!updatedRecord) return res.status(404).json({ message: "Record not found" });
 
-        // 🔥 Trigger smart update alert (compares old vs new status)
+        // 🔥 Trigger smart update alert
         if (oldRecord) {
             notificationEngine.notifyRecordUpdate(oldRecord, updatedRecord);
         }
@@ -161,7 +145,7 @@ app.delete('/api/records/:id', authenticateToken, async (req, res) => {
     } catch (error) { res.status(500).json({ message: "Server Error", error: error.message }); }
 });
 
-// 🔥 FIX: WhatsApp API Routes Mounted Here
+// 🔥 WhatsApp API Routes Mounted
 app.use('/api/whatsapp', whatsappRoutes);
 
 // ==========================================
