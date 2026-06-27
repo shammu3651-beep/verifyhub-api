@@ -1,7 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const { getWhatsAppStatus } = require('../services/whatsappService');
-const authenticateToken = require('../middleware/auth'); // Tumhara existing Zero-Trust middleware
+const authenticateToken = require('../middleware/auth');
+// Modular Zero-Trust middleware imported successfully
 
 // GET /api/whatsapp/status
 router.get('/status', authenticateToken, (req, res) => {
