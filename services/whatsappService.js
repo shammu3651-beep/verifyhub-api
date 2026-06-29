@@ -159,37 +159,46 @@ const resetWhatsApp = async () => {
     setTimeout(connectToWhatsApp, 3000); 
 };
 
-// 🔥 SMART FIX: Added forceRefresh parameter to flush outdated DPs
+// 🔥 SMART FIX: Support for "me" keyword to fetch Admin's Own Connected DP
 async function getProfilePicUrl(phone, forceRefresh = false) {
     if (!sock) return null;
     try {
-        let clean = String(phone).replace(/\D/g, '');
-        if (clean.length === 10) clean = '91' + clean;
+        let jid = '';
+        let cacheKey = '';
+
+        if (phone === 'me' || phone === 'admin') {
+            if (!sock.user || !sock.user.id) return null; 
+            // Extract exact own JID by removing device ID formatting
+            jid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+            cacheKey = 'me';
+        } else {
+            let clean = String(phone).replace(/\D/g, '');
+            if (clean.length === 10) clean = '91' + clean;
+            jid = `${clean}@s.whatsapp.net`;
+            cacheKey = clean;
+        }
         
-        // Bypass cache if forceRefresh is true
-        if (!forceRefresh && backendDpCache.has(clean)) {
-            const cached = backendDpCache.get(clean);
+        if (!forceRefresh && backendDpCache.has(cacheKey)) {
+            const cached = backendDpCache.get(cacheKey);
             if (Date.now() - cached.timestamp < CACHE_TTL) {
                 if (cached.url) return cached.url;
             }
         }
 
-        const jid = `${clean}@s.whatsapp.net`;
         const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 15000));
-        
         const fetchPic = sock.profilePictureUrl(jid, 'image'); 
+        
         const url = await Promise.race([fetchPic, timeout]);
         
         if (url) {
-            backendDpCache.set(clean, { url: url, timestamp: Date.now() });
+            backendDpCache.set(cacheKey, { url: url, timestamp: Date.now() });
             return url;
         }
         return null;
     } catch (err) {
         console.error(`❌ DP Fetch Error for ${phone}:`, err.message);
-        let clean = String(phone).replace(/\D/g, '');
-        if (clean.length === 10) clean = '91' + clean;
-        backendDpCache.delete(clean);
+        let cacheKey = (phone === 'me' || phone === 'admin') ? 'me' : String(phone).replace(/\D/g, '');
+        backendDpCache.delete(cacheKey);
         return null;
     }
 }
