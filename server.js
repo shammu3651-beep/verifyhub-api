@@ -8,7 +8,7 @@ require('dotenv').config();
 const notificationEngine = require('./services/notificationEngine.js');
 const Record = require('./models/Record');
 const whatsappRoutes = require('./routes/whatsappRoutes.js');
-const { connectToWhatsApp } = require('./services/whatsappService.js');
+const { connectToWhatsApp, getWhatsAppStatus, resetWhatsApp } = require('./services/whatsappService.js');
 const authenticateToken = require('./middleware/auth.js');
 const { sendEmailViaService } = require('./services/emailService.js');
 
@@ -59,7 +59,7 @@ const sanitizeRecord = (doc) => {
 };
 
 // ==========================================
-// AUTH ROUTES (For App Internal Use)
+// AUTH ROUTES
 // ==========================================
 app.post('/api/auth/login', async (req, res) => {
     const { username, password } = req.body;
@@ -67,7 +67,6 @@ app.post('/api/auth/login', async (req, res) => {
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
         otpStorage.set(username, { otp: otp, expiresAt: Date.now() + 5 * 60 * 1000 });
 
-        // Using centralized email service interface for safe OTP transport
         const emailResult = await sendEmailViaService({
             to: process.env.ADMIN_EMAIL,
             subject: "VerifyHub Security - Login Access OTP",
@@ -109,7 +108,6 @@ app.post('/api/email/send', authenticateToken, async (req, res) => {
         return res.status(400).json({ success: false, message: "Missing required parameters: to and subject." });
     }
 
-    // Trigger internal centralized service component mapping
     const result = await sendEmailViaService({ to, subject, html, text, type, otp });
     if (result.success) {
         res.status(200).json({ success: true, message: "Email transmitted successfully.", details: result.data });
@@ -132,10 +130,7 @@ app.post('/api/records', authenticateToken, async (req, res) => {
     try {
         const newRecord = new Record(req.body);
         const savedRecord = await newRecord.save();
-        
-        // 🔥 Trigger dynamic new record alert
         notificationEngine.notifyNewRecord(savedRecord);
-        
         res.status(201).json(sanitizeRecord(savedRecord));
     } catch (error) {
         if (error.code === 11000) return res.status(400).json({ message: "Record already exists." });
@@ -148,12 +143,9 @@ app.put('/api/records/:id', authenticateToken, async (req, res) => {
         const oldRecord = await Record.findOne({ id: req.params.id });
         const updatedRecord = await Record.findOneAndUpdate({ id: req.params.id }, req.body, { new: true, runValidators: true });
         if (!updatedRecord) return res.status(404).json({ message: "Record not found" });
-
-        // 🔥 Trigger smart update alert
         if (oldRecord) {
             notificationEngine.notifyRecordUpdate(oldRecord, updatedRecord);
         }
-
         res.status(200).json(sanitizeRecord(updatedRecord));
     } catch (error) { res.status(500).json({ message: "Server Error", error: error.message }); }
 });
@@ -166,11 +158,22 @@ app.delete('/api/records/:id', authenticateToken, async (req, res) => {
     } catch (error) { res.status(500).json({ message: "Server Error", error: error.message }); }
 });
 
-// 🔥 WhatsApp API Routes Mounted
+// ==========================================
+// DASHBOARD & WHATSAPP ROUTES
+// ==========================================
 app.use('/api/whatsapp', whatsappRoutes);
 
+app.get('/api/dashboard/status', (req, res) => {
+    res.status(200).json(getWhatsAppStatus());
+});
+
+app.post('/api/whatsapp/reset', async (req, res) => {
+    await resetWhatsApp();
+    res.status(200).json({ success: true, message: "Engine Reset Triggered" });
+});
+
 // ==========================================
-// FRONTEND STATUS PAGE (Clean UI)
+// FRONTEND STATUS PAGE (Simplified UI)
 // ==========================================
 app.get('/', (req, res) => {
     const statusPageHTML = `
@@ -179,29 +182,34 @@ app.get('/', (req, res) => {
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>VerifyHub - System Status</title>
+        <title>VerifyHub - Admin Dashboard</title>
         <style>
             @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800;900&display=swap');
-            body { margin: 0; padding: 0; font-family: 'Inter', sans-serif; background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); color: #f8fafc; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; }
-            .glass-container { text-align: center; background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); padding: 50px 40px; border-radius: 24px; box-shadow: 0 20px 40px rgba(0,0,0,0.4); border: 1px solid rgba(255, 255, 255, 0.1); max-width: 400px; width: 100%; box-sizing: border-box; }
+            body { margin: 0; padding: 0; font-family: 'Inter', sans-serif; background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); color: #f8fafc; display: flex; justify-content: center; align-items: center; min-height: 100vh; overflow: hidden; }
+            .glass-container { text-align: center; background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); padding: 50px 40px; border-radius: 24px; box-shadow: 0 20px 40px rgba(0,0,0,0.4); border: 1px solid rgba(255, 255, 255, 0.1); max-width: 450px; width: 100%; box-sizing: border-box; }
             .logo-placeholder { width: 60px; height: 60px; background: linear-gradient(135deg, #3b82f6, #4f46e5); border-radius: 16px; display: inline-flex; justify-content: center; align-items: center; margin-bottom: 20px; font-size: 28px; font-weight: 900; color: white; box-shadow: 0 10px 20px rgba(79, 70, 229, 0.3); }
             h1 { margin: 0 0 10px; font-size: 2rem; font-weight: 800; color: #e2e8f0; }
-            p { color: #94a3b8; font-size: 1rem; margin-bottom: 30px; font-weight: 600; }
-            .status-badge { display: inline-flex; align-items: center; background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); padding: 10px 20px; border-radius: 50px; color: #10b981; font-weight: 800; }
-            .pulse { width: 10px; height: 10px; background: #10b981; border-radius: 50%; margin-right: 12px; box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); animation: pulse 2s infinite; }
-            @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(16, 185, 129, 0); } 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); } }
-            .system-info { margin-top: 30px; font-size: 0.8rem; color: #64748b; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 20px; font-weight: 600; }
+            p { color: #94a3b8; font-size: 1rem; font-weight: 600; margin-bottom: 20px; }
+            
+            .status-badge { display: inline-flex; align-items: center; padding: 12px 25px; border-radius: 50px; font-weight: 800; margin-top: 15px; background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); color: #10b981; }
+            .pulse { width: 10px; height: 10px; border-radius: 50%; margin-right: 12px; background: #10b981; animation: pulse-green 2s infinite; }
+            
+            @keyframes pulse-green { 0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(16, 185, 129, 0); } 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); } }
+            
+            .system-info { margin-top: 40px; font-size: 0.8rem; color: #64748b; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 20px; font-weight: 600; }
         </style>
     </head>
     <body>
         <div class="glass-container">
             <div class="logo-placeholder">V</div>
             <h1>VerifyHub API</h1>
-            <p>Secure routing and backend services are operational.</p>
+            <p>Core Routing & Integration Hub</p>
+            
             <div class="status-badge">
                 <div class="pulse"></div>
                 Services Chalu Hai 🚀
             </div>
+
             <div class="system-info">
                 System: Online | Environment: Production
             </div>
