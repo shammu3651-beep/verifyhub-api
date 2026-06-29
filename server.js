@@ -174,13 +174,15 @@ app.post('/api/whatsapp/reset', authenticateToken, async (req, res) => {
     res.status(200).json({ success: true, message: "Engine Reset Triggered" });
 });
 
-// 🔥 BULLETPROOF DP ROUTE (Directly in Server.js)
+// 🔥 BULLETPROOF SMART DP ROUTE (Directly in Server.js)
 app.get('/api/whatsapp/get-dp/:phone', authenticateToken, async (req, res) => {
     try {
         const phone = req.params.phone;
+        const forceRefresh = req.query.force === 'true';
+
         if (!phone) return res.status(400).json({ success: false, url: null });
 
-        const url = await getProfilePicUrl(phone);
+        const url = await getProfilePicUrl(phone, forceRefresh);
         if (url) {
             res.status(200).json({ success: true, url: url });
         } else {
@@ -193,7 +195,7 @@ app.get('/api/whatsapp/get-dp/:phone', authenticateToken, async (req, res) => {
 });
 
 // ==========================================
-// FRONTEND STATUS PAGE (Simplified UI)
+// FRONTEND STATUS PAGE
 // ==========================================
 app.get('/', (req, res) => {
     const statusPageHTML = `
