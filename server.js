@@ -2,6 +2,8 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
+const helmet = require('helmet'); // 🔥 Security: HTTP Header Protection
+const rateLimit = require('express-rate-limit'); // 🔥 Security: Anti Brute-Force
 require('dotenv').config();
 
 // 🔥 Modules Import
@@ -13,8 +15,24 @@ const authenticateToken = require('./middleware/auth.js');
 const { sendEmailViaService } = require('./services/emailService.js');
 
 const app = express();
-app.use(cors()); 
-app.use(express.json());
+
+// ==========================================
+// ELITE SECURITY MIDDLEWARES
+// ==========================================
+app.use(helmet()); 
+app.use(cors({
+    origin: process.env.ALLOWED_ORIGIN || '*', 
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+})); 
+app.use(express.json({ limit: '5mb' })); // Protects against heavy JSON payload attacks
+
+// Rate Limiter for Authentication (Blocks hackers from guessing passwords)
+const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 10, // Limit each IP to 10 login requests per `window`
+    message: { success: false, message: "Too many login attempts from this IP, please try again after 15 minutes." }
+});
 
 // Initialize Notifications, Cron Jobs and WhatsApp Engine
 notificationEngine.initFirebase();
@@ -59,9 +77,9 @@ const sanitizeRecord = (doc) => {
 };
 
 // ==========================================
-// AUTH ROUTES
+// AUTH ROUTES (Protected with Rate Limiter)
 // ==========================================
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', authLimiter, async (req, res) => {
     const { username, password } = req.body;
     if (username === process.env.ADMIN_USERNAME && password === process.env.ADMIN_PASS) {
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
@@ -84,7 +102,7 @@ app.post('/api/auth/login', async (req, res) => {
     }
 });
 
-app.post('/api/auth/verify-otp', (req, res) => {
+app.post('/api/auth/verify-otp', authLimiter, (req, res) => {
     const { username, otp } = req.body;
     const storedData = otpStorage.get(username);
     if (!storedData) return res.status(400).json({ success: false, message: "No active OTP session found." });
@@ -167,7 +185,7 @@ app.get('/api/dashboard/status', (req, res) => {
     res.status(200).json(getWhatsAppStatus());
 });
 
-app.post('/api/whatsapp/reset', async (req, res) => {
+app.post('/api/whatsapp/reset', authenticateToken, async (req, res) => {
     await resetWhatsApp();
     res.status(200).json({ success: true, message: "Engine Reset Triggered" });
 });
