@@ -159,14 +159,15 @@ const resetWhatsApp = async () => {
     setTimeout(connectToWhatsApp, 3000); 
 };
 
-// 🔥 FIX: Robust Extractor function for DP retrieval over Baileys Socket
-async function getProfilePicUrl(phone) {
+// 🔥 SMART FIX: Added forceRefresh parameter to flush outdated DPs
+async function getProfilePicUrl(phone, forceRefresh = false) {
     if (!sock) return null;
     try {
         let clean = String(phone).replace(/\D/g, '');
         if (clean.length === 10) clean = '91' + clean;
         
-        if (backendDpCache.has(clean)) {
+        // Bypass cache if forceRefresh is true
+        if (!forceRefresh && backendDpCache.has(clean)) {
             const cached = backendDpCache.get(clean);
             if (Date.now() - cached.timestamp < CACHE_TTL) {
                 if (cached.url) return cached.url;
@@ -174,10 +175,9 @@ async function getProfilePicUrl(phone) {
         }
 
         const jid = `${clean}@s.whatsapp.net`;
-        // 🔥 FIX: Increased Timeout to 15 Seconds for Cloud Server Latency
         const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 15000));
-        const fetchPic = sock.profilePictureUrl(jid, 'image');
         
+        const fetchPic = sock.profilePictureUrl(jid, 'image'); 
         const url = await Promise.race([fetchPic, timeout]);
         
         if (url) {
@@ -187,7 +187,6 @@ async function getProfilePicUrl(phone) {
         return null;
     } catch (err) {
         console.error(`❌ DP Fetch Error for ${phone}:`, err.message);
-        // 🔥 FIX: DO NOT cache failure! Let the user retry on next click.
         let clean = String(phone).replace(/\D/g, '');
         if (clean.length === 10) clean = '91' + clean;
         backendDpCache.delete(clean);
