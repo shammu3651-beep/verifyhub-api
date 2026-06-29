@@ -9,7 +9,8 @@ const notificationEngine = require('./services/notificationEngine.js');
 const Record = require('./models/Record');
 const whatsappRoutes = require('./routes/whatsappRoutes.js');
 const { connectToWhatsApp } = require('./services/whatsappService.js');
-const authenticateToken = require('./middleware/auth.js'); // 🔥 Modular Auth Import
+const authenticateToken = require('./middleware/auth.js');
+const { sendEmailViaService } = require('./services/emailService.js');
 
 const app = express();
 app.use(cors()); 
@@ -66,16 +67,18 @@ app.post('/api/auth/login', async (req, res) => {
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
         otpStorage.set(username, { otp: otp, expiresAt: Date.now() + 5 * 60 * 1000 });
 
-        try {
-            const vercelRes = await fetch('https://email-testtt.vercel.app/api/send-email', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.VERCEL_EMAIL_API_KEY}` },
-                body: JSON.stringify({ to: process.env.ADMIN_EMAIL, subject: "VerifyHub Security - Login Access OTP", type: "otp", otp: otp })
-            });
-            if (vercelRes.ok) res.status(200).json({ success: true, message: `OTP successfully sent.` });
-            else res.status(500).json({ success: false, message: "Server Error: Failed to dispatch OTP." });
-        } catch (error) {
-            res.status(500).json({ success: false, message: "Network Error: Mail gateway unreachable." });
+        // Using centralized email service interface for safe OTP transport
+        const emailResult = await sendEmailViaService({
+            to: process.env.ADMIN_EMAIL,
+            subject: "VerifyHub Security - Login Access OTP",
+            type: "otp",
+            otp: otp
+        });
+
+        if (emailResult.success) {
+            res.status(200).json({ success: true, message: "OTP successfully sent." });
+        } else {
+            res.status(500).json({ success: false, message: `Server Error: ${emailResult.error}` });
         }
     } else {
         res.status(401).json({ success: false, message: "Invalid credentials." });
@@ -94,6 +97,24 @@ app.post('/api/auth/verify-otp', (req, res) => {
         res.status(200).json({ success: true, message: "Access Granted.", token: token });
     } else {
         res.status(401).json({ success: false, message: "Invalid OTP." });
+    }
+});
+
+// ==========================================
+// GENERIC EMAIL DISPATCH ROUTE
+// ==========================================
+app.post('/api/email/send', authenticateToken, async (req, res) => {
+    const { to, subject, html, text, type, otp } = req.body;
+    if (!to || !subject) {
+        return res.status(400).json({ success: false, message: "Missing required parameters: to and subject." });
+    }
+
+    // Trigger internal centralized service component mapping
+    const result = await sendEmailViaService({ to, subject, html, text, type, otp });
+    if (result.success) {
+        res.status(200).json({ success: true, message: "Email transmitted successfully.", details: result.data });
+    } else {
+        res.status(500).json({ success: false, message: "Email relay failed.", error: result.error });
     }
 });
 
