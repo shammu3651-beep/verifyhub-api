@@ -1,6 +1,7 @@
-const { default: makeWASocket, DisconnectReason, Browsers, initAuthCreds, BufferJSON } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, DisconnectReason, initAuthCreds, BufferJSON, fetchLatestBaileysVersion, makeCacheableSignalKeyStore } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const QRCode = require('qrcode');
+const qrcodeTerminal = require('qrcode-terminal'); 
 const BaileysAuth = require('../models/BaileysAuth');
 
 let sock;
@@ -59,16 +60,23 @@ const connectToWhatsApp = async () => {
         const { state, saveCreds } = await useMongoDBAuthState();
         console.log('✅ MongoDB Auth State Loaded Successfully');
 
-        // Reverted to macOS Desktop to avoid aggressive Render IP blocking
+        // 🔥 CAFFFF SECRET 1: Always fetch the latest WhatsApp Web Version to bypass 405 Error
+        const { version, isLatest } = await fetchLatestBaileysVersion();
+        console.log(`🚀 Starting Cloud WA Engine (v${version.join('.')}) - Session backed by MongoDB!`);
+
         sock = makeWASocket({
-            auth: state,
-            printQRInTerminal: true, 
-            logger: pino({ level: 'silent' }), // Keep it silent to avoid log bloat on Render
-            browser: Browsers.macOS('Desktop'),
+            version, // Inherited from Caffff to fix connection rejection
+            auth: {
+                creds: state.creds,
+                // 🔥 CAFFFF SECRET 2: Caching layer prevents MongoDB read/write bottlenecking
+                keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' }))
+            },
+            logger: pino({ level: 'silent' }), 
+            browser: ["VerifyHub Admin", "Chrome", "1.0.0"], 
             syncFullHistory: false,
             generateHighQualityLinkPreview: false,
             connectTimeoutMs: 60000,
-            keepAliveIntervalMs: 25000, // Slightly higher interval to stay stable
+            keepAliveIntervalMs: 25000,
             markOnlineOnConnect: false
         });
 
@@ -78,10 +86,17 @@ const connectToWhatsApp = async () => {
             const { connection, lastDisconnect, qr } = update;
 
             if (qr) {
-                console.log('🔄 New WhatsApp QR String Received from WhatsApp Servers!');
+                console.log('\n=================================================');
+                console.log('📱 SCAN THIS QR CODE WITH YOUR WHATSAPP');
+                console.log('=================================================\n');
+                
+                qrcodeTerminal.generate(qr, { small: true });
+                
+                console.log('\n(Waiting for scan...)\n');
+
                 try {
                     currentQRBase64 = await QRCode.toDataURL(qr); 
-                    console.log('✅ QR Code Base64 Encoded for Android App');
+                    console.log('✅ QR Code Base64 Encoded for Web Dashboard');
                 } catch (qrErr) {
                     console.error('❌ Failed to encode QR:', qrErr);
                 }
@@ -89,27 +104,30 @@ const connectToWhatsApp = async () => {
 
             if (connection === 'close') {
                 isConnected = false;
-                const statusCode = lastDisconnect?.error?.output?.statusCode;
-                console.log(`⚠️ WhatsApp Connection Closed. Code: ${statusCode}`);
+                currentQRBase64 = null;
                 
-                // 🔥 ELITE FIX: Added 401 (Unauthorized) and 403 (Forbidden) to aggressive wipe sequence
-                const shouldWipeSession = 
-                    statusCode === DisconnectReason.loggedOut || 
-                    statusCode === 401 || 
-                    statusCode === 403;
-
-                if (shouldWipeSession) {
-                    console.log('🚫 WhatsApp Session Corrupted or Logged Out! Wiping Session Data from MongoDB...');
-                    await BaileysAuth.deleteMany({});
-                    currentQRBase64 = null;
-                    setTimeout(connectToWhatsApp, 5000);
+                const statusCode = lastDisconnect?.error?.output?.statusCode;
+                const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+                
+                console.log(`❌ WhatsApp Connection Closed. Status Code: ${statusCode}. Reconnecting: ${shouldReconnect}`);
+                
+                if (shouldReconnect) {
+                    console.log('🔄 Temporary Drop. Attempting Reconnect in 3 seconds...');
+                    setTimeout(connectToWhatsApp, 3000);
                 } else {
-                    // For Code 405 or temporary drops, DO NOT wipe DB. Just reconnect.
-                    console.log('🔄 Temporary Drop. Attempting Reconnect in 5 seconds...');
-                    setTimeout(connectToWhatsApp, 5000);
+                    console.log('🚫 Logged out. Automatically wiping DB session data...');
+                    try {
+                        await BaileysAuth.deleteMany({});
+                        console.log('✅ Old DB session wiped successfully. Generating fresh QR code...');
+                    } catch (err) {
+                        console.error('⚠️ Could not wipe DB auth data:', err.message);
+                    }
+                    setTimeout(connectToWhatsApp, 3000);
                 }
             } else if (connection === 'open') {
+                console.log('\n✅ ===========================================');
                 console.log('✅ WhatsApp Web Successfully Connected!');
+                console.log('✅ ===========================================\n');
                 isConnected = true;
                 currentQRBase64 = null;
             }
@@ -117,6 +135,7 @@ const connectToWhatsApp = async () => {
 
     } catch (error) {
         console.error('❌ CRITICAL ERROR in WhatsApp Engine:', error);
+        setTimeout(connectToWhatsApp, 5000); 
     }
 };
 
@@ -127,4 +146,20 @@ const getWhatsAppStatus = () => {
     };
 };
 
-module.exports = { connectToWhatsApp, getWhatsAppStatus };
+const resetWhatsApp = async () => {
+    console.log('🧹 FORCED RESET: Wiping MongoDB Session & Restarting Engine...');
+    await BaileysAuth.deleteMany({});
+    currentQRBase64 = null;
+    isConnected = false;
+    try {
+        if (sock) {
+            sock.ev.removeAllListeners();
+            sock.ws.close(); 
+        }
+    } catch (e) {
+        console.log('Socket cleanup minor warning ignored.');
+    }
+    setTimeout(connectToWhatsApp, 3000); 
+};
+
+module.exports = { connectToWhatsApp, getWhatsAppStatus, resetWhatsApp };
