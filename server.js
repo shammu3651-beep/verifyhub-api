@@ -2,37 +2,21 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
-const helmet = require('helmet'); // 🔥 Security: HTTP Header Protection
-const rateLimit = require('express-rate-limit'); // 🔥 Security: Anti Brute-Force
 require('dotenv').config();
 
 // 🔥 Modules Import
 const notificationEngine = require('./services/notificationEngine.js');
 const Record = require('./models/Record');
 const whatsappRoutes = require('./routes/whatsappRoutes.js');
-const { connectToWhatsApp, getWhatsAppStatus, resetWhatsApp } = require('./services/whatsappService.js');
+
+// 🔥 FIX: Imported getProfilePicUrl directly
+const { connectToWhatsApp, getWhatsAppStatus, resetWhatsApp, getProfilePicUrl } = require('./services/whatsappService.js');
 const authenticateToken = require('./middleware/auth.js');
 const { sendEmailViaService } = require('./services/emailService.js');
 
 const app = express();
-
-// ==========================================
-// ELITE SECURITY MIDDLEWARES
-// ==========================================
-app.use(helmet()); 
-app.use(cors({
-    origin: process.env.ALLOWED_ORIGIN || '*', 
-    methods: ['GET', 'POST', 'PUT', 'DELETE'],
-    allowedHeaders: ['Content-Type', 'Authorization']
-})); 
-app.use(express.json({ limit: '5mb' })); // Protects against heavy JSON payload attacks
-
-// Rate Limiter for Authentication (Blocks hackers from guessing passwords)
-const authLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 10, // Limit each IP to 10 login requests per `window`
-    message: { success: false, message: "Too many login attempts from this IP, please try again after 15 minutes." }
-});
+app.use(cors()); 
+app.use(express.json());
 
 // Initialize Notifications, Cron Jobs and WhatsApp Engine
 notificationEngine.initFirebase();
@@ -77,9 +61,9 @@ const sanitizeRecord = (doc) => {
 };
 
 // ==========================================
-// AUTH ROUTES (Protected with Rate Limiter)
+// AUTH ROUTES
 // ==========================================
-app.post('/api/auth/login', authLimiter, async (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
     const { username, password } = req.body;
     if (username === process.env.ADMIN_USERNAME && password === process.env.ADMIN_PASS) {
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
@@ -102,7 +86,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
     }
 });
 
-app.post('/api/auth/verify-otp', authLimiter, (req, res) => {
+app.post('/api/auth/verify-otp', (req, res) => {
     const { username, otp } = req.body;
     const storedData = otpStorage.get(username);
     if (!storedData) return res.status(400).json({ success: false, message: "No active OTP session found." });
@@ -188,6 +172,24 @@ app.get('/api/dashboard/status', (req, res) => {
 app.post('/api/whatsapp/reset', authenticateToken, async (req, res) => {
     await resetWhatsApp();
     res.status(200).json({ success: true, message: "Engine Reset Triggered" });
+});
+
+// 🔥 BULLETPROOF DP ROUTE (Directly in Server.js)
+app.get('/api/whatsapp/get-dp/:phone', authenticateToken, async (req, res) => {
+    try {
+        const phone = req.params.phone;
+        if (!phone) return res.status(400).json({ success: false, url: null });
+
+        const url = await getProfilePicUrl(phone);
+        if (url) {
+            res.status(200).json({ success: true, url: url });
+        } else {
+            res.status(200).json({ success: false, url: null });
+        }
+    } catch (error) {
+        console.error("DP Fetch Server Route Error:", error);
+        res.status(500).json({ success: false, url: null });
+    }
 });
 
 // ==========================================
