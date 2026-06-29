@@ -159,7 +159,6 @@ const resetWhatsApp = async () => {
     setTimeout(connectToWhatsApp, 3000); 
 };
 
-// 🔥 SMART FIX: Support for "me" keyword to fetch Admin's Own Connected DP
 async function getProfilePicUrl(phone, forceRefresh = false) {
     if (!sock) return null;
     try {
@@ -168,7 +167,6 @@ async function getProfilePicUrl(phone, forceRefresh = false) {
 
         if (phone === 'me' || phone === 'admin') {
             if (!sock.user || !sock.user.id) return null; 
-            // Extract exact own JID by removing device ID formatting
             jid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
             cacheKey = 'me';
         } else {
@@ -203,4 +201,23 @@ async function getProfilePicUrl(phone, forceRefresh = false) {
     }
 }
 
-module.exports = { connectToWhatsApp, getWhatsAppStatus, resetWhatsApp, getProfilePicUrl };
+// 🔥 SMART WA MSG ENGINE
+async function sendAutoWaMessage(phone, text) {
+    if (!sock || !isConnected) {
+        return false;
+    }
+    try {
+        let clean = String(phone).replace(/\D/g, '');
+        if (clean.length === 10) clean = '91' + clean;
+        const jid = `${clean}@s.whatsapp.net`;
+        
+        await sock.sendMessage(jid, { text: text });
+        return true;
+    } catch (err) {
+        console.error("❌ Send Error:", err.message);
+        return false;
+    }
+}
+
+// Ensure sendAutoWaMessage is exported
+module.exports = { connectToWhatsApp, getWhatsAppStatus, resetWhatsApp, getProfilePicUrl, sendAutoWaMessage };
