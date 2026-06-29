@@ -92,9 +92,14 @@ const connectToWhatsApp = async () => {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
                 console.log(`⚠️ WhatsApp Connection Closed. Code: ${statusCode}`);
                 
-                // Only wipe DB on exact logout. Ignore rate limits (405) for session wiping.
-                if (statusCode === DisconnectReason.loggedOut) {
-                    console.log('🚫 WhatsApp Logged Out! Wiping Session Data from MongoDB...');
+                // 🔥 ELITE FIX: Added 401 (Unauthorized) and 403 (Forbidden) to aggressive wipe sequence
+                const shouldWipeSession = 
+                    statusCode === DisconnectReason.loggedOut || 
+                    statusCode === 401 || 
+                    statusCode === 403;
+
+                if (shouldWipeSession) {
+                    console.log('🚫 WhatsApp Session Corrupted or Logged Out! Wiping Session Data from MongoDB...');
                     await BaileysAuth.deleteMany({});
                     currentQRBase64 = null;
                     setTimeout(connectToWhatsApp, 5000);
