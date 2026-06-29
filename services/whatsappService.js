@@ -8,7 +8,10 @@ let sock;
 let currentQRBase64 = null;
 let isConnected = false;
 
-// Smart MongoDB Auth Adapter for Baileys
+// 24 Hour LRU Cache for DPs
+const backendDpCache = new Map();
+const CACHE_TTL = 24 * 60 * 60 * 1000; 
+
 const useMongoDBAuthState = async () => {
     let credsDoc = await BaileysAuth.findById('creds');
     let creds = credsDoc ? JSON.parse(credsDoc.data, BufferJSON.reviver) : initAuthCreds();
@@ -60,15 +63,13 @@ const connectToWhatsApp = async () => {
         const { state, saveCreds } = await useMongoDBAuthState();
         console.log('✅ MongoDB Auth State Loaded Successfully');
 
-        // 🔥 CAFFFF SECRET 1: Always fetch the latest WhatsApp Web Version to bypass 405 Error
         const { version, isLatest } = await fetchLatestBaileysVersion();
         console.log(`🚀 Starting Cloud WA Engine (v${version.join('.')}) - Session backed by MongoDB!`);
 
         sock = makeWASocket({
-            version, // Inherited from Caffff to fix connection rejection
+            version, 
             auth: {
                 creds: state.creds,
-                // 🔥 CAFFFF SECRET 2: Caching layer prevents MongoDB read/write bottlenecking
                 keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' }))
             },
             logger: pino({ level: 'silent' }), 
@@ -89,11 +90,8 @@ const connectToWhatsApp = async () => {
                 console.log('\n=================================================');
                 console.log('📱 SCAN THIS QR CODE WITH YOUR WHATSAPP');
                 console.log('=================================================\n');
-                
                 qrcodeTerminal.generate(qr, { small: true });
-                
                 console.log('\n(Waiting for scan...)\n');
-
                 try {
                     currentQRBase64 = await QRCode.toDataURL(qr); 
                     console.log('✅ QR Code Base64 Encoded for Web Dashboard');
@@ -105,7 +103,6 @@ const connectToWhatsApp = async () => {
             if (connection === 'close') {
                 isConnected = false;
                 currentQRBase64 = null;
-                
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
                 const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
                 
@@ -162,4 +159,35 @@ const resetWhatsApp = async () => {
     setTimeout(connectToWhatsApp, 3000); 
 };
 
-module.exports = { connectToWhatsApp, getWhatsAppStatus, resetWhatsApp };
+// Extractor function for DP retrieval over Baileys Socket
+async function getProfilePicUrl(phone) {
+    if (!sock) return null;
+    try {
+        let clean = String(phone).replace(/\D/g, '');
+        if (clean.length === 10) clean = '91' + clean;
+        
+        if (backendDpCache.has(clean)) {
+            const cached = backendDpCache.get(clean);
+            if (Date.now() - cached.timestamp < CACHE_TTL) {
+                return cached.url;
+            } else {
+                backendDpCache.delete(clean);
+            }
+        }
+
+        const jid = `${clean}@s.whatsapp.net`;
+        const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 5000));
+        const fetchPic = sock.profilePictureUrl(jid, 'image');
+        const url = await Promise.race([fetchPic, timeout]);
+        
+        backendDpCache.set(clean, { url: url, timestamp: Date.now() });
+        return url;
+    } catch (err) {
+        let clean = String(phone).replace(/\D/g, '');
+        if (clean.length === 10) clean = '91' + clean;
+        backendDpCache.set(clean, { url: null, timestamp: Date.now() });
+        return null;
+    }
+}
+
+module.exports = { connectToWhatsApp, getWhatsAppStatus, resetWhatsApp, getProfilePicUrl };
