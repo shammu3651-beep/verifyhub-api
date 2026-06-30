@@ -1,7 +1,12 @@
+// ===============================
+// FILE: server.js
+// ===============================
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
+const fs = require('fs');
+const path = require('path');
 require('dotenv').config();
 
 // 🔥 Modules Import
@@ -9,8 +14,8 @@ const notificationEngine = require('./services/notificationEngine.js');
 const Record = require('./models/Record');
 const whatsappRoutes = require('./routes/whatsappRoutes.js');
 
-// 🔥 Exposed sendAutoWaMessage
-const { connectToWhatsApp, getWhatsAppStatus, resetWhatsApp, getProfilePicUrl, sendAutoWaMessage } = require('./services/whatsappService.js');
+// 🔥 Exposed sendAutoWaMessage & sendLocalMedia
+const { connectToWhatsApp, getWhatsAppStatus, resetWhatsApp, getProfilePicUrl, sendAutoWaMessage, sendLocalMedia } = require('./services/whatsappService.js');
 const authenticateToken = require('./middleware/auth.js');
 const { sendEmailViaService } = require('./services/emailService.js');
 
@@ -211,6 +216,40 @@ app.post('/api/whatsapp/send/:phone', authenticateToken, async (req, res) => {
         }
     } catch (error) {
         console.error("WA Send Error:", error);
+        res.status(500).json({ success: false, message: "Server Error" });
+    }
+});
+
+// 🔥 NEW ROUTE: Send Media dynamically from Local Folder By Category & Serial
+app.post('/api/whatsapp/send-media/:phone', authenticateToken, async (req, res) => {
+    try {
+        const phone = req.params.phone;
+        const { category, serial, caption } = req.body;
+
+        if (!phone || !category || !serial) {
+            return res.status(400).json({ success: false, message: "Invalid payload. Category and Serial required." });
+        }
+
+        // Secure sanitization to prevent directory traversal
+        const safeCategory = String(category).replace(/[^a-zA-Z0-9_-]/g, "");
+        const safeSerial = String(serial).replace(/[^a-zA-Z0-9_-]/g, "");
+        
+        // Locates: <root>/media/verification/individual/1.jpg
+        const filePath = path.join(process.cwd(), 'media', 'verification', safeCategory, `${safeSerial}.jpg`);
+
+        if (!fs.existsSync(filePath)) {
+            return res.status(404).json({ success: false, message: "Media file not found in directory", expectedPath: `media/verification/${safeCategory}/${safeSerial}.jpg` });
+        }
+
+        const isSent = await sendLocalMedia(phone, filePath, caption || "");
+        
+        if (isSent) {
+            res.status(200).json({ success: true, message: `Image ${safeSerial}.jpg sent successfully from ${safeCategory} folder.` });
+        } else {
+            res.status(500).json({ success: false, message: "Cloud WA is offline or not connected" });
+        }
+    } catch (error) {
+        console.error("WA Media Send Error:", error);
         res.status(500).json({ success: false, message: "Server Error" });
     }
 });
