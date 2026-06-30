@@ -1,3 +1,6 @@
+// ===============================
+// FILE: services/whatsappService.js
+// ===============================
 const { default: makeWASocket, DisconnectReason, initAuthCreds, BufferJSON, fetchLatestBaileysVersion, makeCacheableSignalKeyStore } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const QRCode = require('qrcode');
@@ -10,7 +13,7 @@ let isConnected = false;
 
 // 24 Hour LRU Cache for DPs
 const backendDpCache = new Map();
-const CACHE_TTL = 24 * 60 * 60 * 1000; 
+const CACHE_TTL = 24 * 60 * 60 * 1000;
 
 const useMongoDBAuthState = async () => {
     let credsDoc = await BaileysAuth.findById('creds');
@@ -62,10 +65,9 @@ const connectToWhatsApp = async () => {
         console.log('⏳ Initializing WhatsApp Engine...');
         const { state, saveCreds } = await useMongoDBAuthState();
         console.log('✅ MongoDB Auth State Loaded Successfully');
-
         const { version, isLatest } = await fetchLatestBaileysVersion();
         console.log(`🚀 Starting Cloud WA Engine (v${version.join('.')}) - Session backed by MongoDB!`);
-
+        
         sock = makeWASocket({
             version, 
             auth: {
@@ -80,7 +82,7 @@ const connectToWhatsApp = async () => {
             keepAliveIntervalMs: 25000,
             markOnlineOnConnect: false
         });
-
+        
         sock.ev.on('creds.update', saveCreds);
 
         sock.ev.on('connection.update', async (update) => {
@@ -164,9 +166,9 @@ async function getProfilePicUrl(phone, forceRefresh = false) {
     try {
         let jid = '';
         let cacheKey = '';
-
+        
         if (phone === 'me' || phone === 'admin') {
-            if (!sock.user || !sock.user.id) return null; 
+            if (!sock.user || !sock.user.id) return null;
             jid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
             cacheKey = 'me';
         } else {
@@ -187,7 +189,6 @@ async function getProfilePicUrl(phone, forceRefresh = false) {
         const fetchPic = sock.profilePictureUrl(jid, 'image'); 
         
         const url = await Promise.race([fetchPic, timeout]);
-        
         if (url) {
             backendDpCache.set(cacheKey, { url: url, timestamp: Date.now() });
             return url;
@@ -219,5 +220,26 @@ async function sendAutoWaMessage(phone, text) {
     }
 }
 
-// Ensure sendAutoWaMessage is exported
-module.exports = { connectToWhatsApp, getWhatsAppStatus, resetWhatsApp, getProfilePicUrl, sendAutoWaMessage };
+// 🔥 SMART WA MEDIA ENGINE - Serves files directly from local storage
+async function sendLocalMedia(phone, filePath, caption = "") {
+    if (!sock || !isConnected) {
+        return false;
+    }
+    try {
+        let clean = String(phone).replace(/\D/g, '');
+        if (clean.length === 10) clean = '91' + clean;
+        const jid = `${clean}@s.whatsapp.net`;
+        
+        await sock.sendMessage(jid, { 
+            image: { url: filePath }, 
+            caption: caption 
+        });
+        return true;
+    } catch (err) {
+        console.error("❌ Media Send Error:", err.message);
+        return false;
+    }
+}
+
+// Ensure modules are exported
+module.exports = { connectToWhatsApp, getWhatsAppStatus, resetWhatsApp, getProfilePicUrl, sendAutoWaMessage, sendLocalMedia };
