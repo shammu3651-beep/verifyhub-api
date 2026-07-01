@@ -22,6 +22,7 @@ connectToWhatsApp();
 mongoose.connect(process.env.MONGODB_URI)
     .then(() => console.log('✅ Securely Connected to MongoDB Atlas'))
     .catch((err) => console.error('❌ MongoDB Connection Error:', err));
+
 const JWT_SECRET = process.env.JWT_SECRET || 'VerifyHub_Elite_Security_Key_2026';
 const otpStorage = new Map();
 
@@ -39,7 +40,6 @@ const sanitizeRecord = (doc) => {
         date: String(raw.date || ""),
         activationDate: String(raw.activationDate || ""),
         verificationDueDate: String(raw.verificationDueDate || ""),
-    
         status: String(raw.status || "Pending"),
         planValue: String(raw.planValue || ""),
         billDate: String(raw.billDate || ""),
@@ -50,12 +50,47 @@ const sanitizeRecord = (doc) => {
         gender: String(raw.gender || ""),
         paidMonths: String(raw.paidMonths || ""),
         groupId: String(raw.groupId || ""),
-
         // 🔥 Added Soft Delete fields to API Response
         isDeleted: Boolean(raw.isDeleted || false),
         deletedAt: raw.deletedAt ? raw.deletedAt.toISOString() : ""
     };
 };
+
+// ==========================================
+// EXTERNAL API ROUTES (API KEY BASED)
+// ==========================================
+const verifyApiKey = (req, res, next) => {
+    const apiKey = req.headers['x-api-key'];
+    const validKey = process.env.EXTERNAL_API_KEY; // Configure this in your .env
+    
+    if (!validKey) {
+        return res.status(500).json({ success: false, message: 'Server Configuration Error: EXTERNAL_API_KEY missing' });
+    }
+    
+    if (!apiKey || apiKey !== validKey) {
+        return res.status(403).json({ success: false, message: 'Access Denied: Invalid API Key' });
+    }
+    next();
+};
+
+app.post('/api/external/records', verifyApiKey, async (req, res) => {
+    try {
+        const payload = req.body;
+        // Generate a unique ID if not provided by the static page
+        if (!payload.id) {
+            payload.id = "EXT-" + Date.now().toString() + "-" + Math.floor(Math.random() * 1000);
+        }
+        
+        const newRecord = new Record(payload);
+        const savedRecord = await newRecord.save();
+        
+        notificationEngine.notifyNewRecord(savedRecord);
+        res.status(201).json({ success: true, message: "Entry successfully added via API Key", data: sanitizeRecord(savedRecord) });
+    } catch (error) {
+        if (error.code === 11000) return res.status(400).json({ success: false, message: "Record ID already exists." });
+        res.status(500).json({ success: false, message: "Server Error", error: error.message });
+    }
+});
 
 // ==========================================
 // AUTH & EMAIL ROUTES
@@ -194,10 +229,12 @@ app.delete('/api/recycle-bin/empty', authenticateToken, async (req, res) => {
 // ==========================================
 app.use('/api/whatsapp', whatsappRoutes);
 app.get('/api/dashboard/status', (req, res) => { res.status(200).json(getWhatsAppStatus()); });
+
 app.post('/api/whatsapp/reset', authenticateToken, async (req, res) => {
     await resetWhatsApp();
     res.status(200).json({ success: true, message: "Engine Reset Triggered" });
 });
+
 app.get('/api/whatsapp/get-dp/:phone', authenticateToken, async (req, res) => {
     try {
         const phone = req.params.phone;
@@ -208,6 +245,7 @@ app.get('/api/whatsapp/get-dp/:phone', authenticateToken, async (req, res) => {
         else res.status(200).json({ success: false, url: null });
     } catch (error) { res.status(500).json({ success: false, url: null }); }
 });
+
 app.post('/api/whatsapp/send/:phone', authenticateToken, async (req, res) => {
     try {
         const phone = req.params.phone;
@@ -218,6 +256,7 @@ app.post('/api/whatsapp/send/:phone', authenticateToken, async (req, res) => {
         else res.status(500).json({ success: false, message: "Cloud WA is offline or not connected" });
     } catch (error) { res.status(500).json({ success: false, message: "Server Error" }); }
 });
+
 app.post('/api/whatsapp/send-media/:phone', authenticateToken, async (req, res) => {
     try {
         const phone = req.params.phone;
