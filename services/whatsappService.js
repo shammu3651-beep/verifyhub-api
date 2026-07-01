@@ -1,11 +1,10 @@
-// ===============================
-// FILE: services/whatsappService.js
-// ===============================
 const { default: makeWASocket, DisconnectReason, initAuthCreds, BufferJSON, fetchLatestBaileysVersion, makeCacheableSignalKeyStore } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const QRCode = require('qrcode');
 const qrcodeTerminal = require('qrcode-terminal'); 
 const BaileysAuth = require('../models/BaileysAuth');
+const fs = require('fs');
+const path = require('path');
 
 let sock;
 let currentQRBase64 = null;
@@ -67,7 +66,6 @@ const connectToWhatsApp = async () => {
         console.log('✅ MongoDB Auth State Loaded Successfully');
         const { version, isLatest } = await fetchLatestBaileysVersion();
         console.log(`🚀 Starting Cloud WA Engine (v${version.join('.')}) - Session backed by MongoDB!`);
-        
         sock = makeWASocket({
             version, 
             auth: {
@@ -82,7 +80,6 @@ const connectToWhatsApp = async () => {
             keepAliveIntervalMs: 25000,
             markOnlineOnConnect: false
         });
-        
         sock.ev.on('creds.update', saveCreds);
 
         sock.ev.on('connection.update', async (update) => {
@@ -107,7 +104,6 @@ const connectToWhatsApp = async () => {
                 currentQRBase64 = null;
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
                 const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-                
                 console.log(`❌ WhatsApp Connection Closed. Status Code: ${statusCode}. Reconnecting: ${shouldReconnect}`);
                 
                 if (shouldReconnect) {
@@ -166,7 +162,6 @@ async function getProfilePicUrl(phone, forceRefresh = false) {
     try {
         let jid = '';
         let cacheKey = '';
-        
         if (phone === 'me' || phone === 'admin') {
             if (!sock.user || !sock.user.id) return null;
             jid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
@@ -202,7 +197,6 @@ async function getProfilePicUrl(phone, forceRefresh = false) {
     }
 }
 
-// 🔥 SMART WA MSG ENGINE
 async function sendAutoWaMessage(phone, text) {
     if (!sock || !isConnected) {
         return false;
@@ -220,26 +214,47 @@ async function sendAutoWaMessage(phone, text) {
     }
 }
 
-// 🔥 SMART WA MEDIA ENGINE - Serves files directly from local storage
-async function sendLocalMedia(phone, filePath, caption = "") {
+async function sendVerificationMedia(phone, type) {
     if (!sock || !isConnected) {
-        return false;
+        return { success: false, message: "Engine Offline" };
     }
     try {
         let clean = String(phone).replace(/\D/g, '');
         if (clean.length === 10) clean = '91' + clean;
         const jid = `${clean}@s.whatsapp.net`;
+
+        const folderName = (type === 'family') ? 'family' : 'individual';
+        const mediaDir = path.join(__dirname, '..', 'media', 'verification', folderName);
+
+        if (!fs.existsSync(mediaDir)) {
+            fs.mkdirSync(mediaDir, { recursive: true });
+            return { success: false, message: `Created missing directory: ${folderName}` };
+        }
+
+        const files = fs.readdirSync(mediaDir).filter(file => file.match(/\.(jpg|jpeg|png)$/i));
         
-        await sock.sendMessage(jid, { 
-            image: { url: filePath }, 
-            caption: caption 
+        if (files.length === 0) {
+            return { success: false, message: "No media files found in folder." };
+        }
+
+        files.sort((a, b) => {
+            const numA = parseInt(a.split('.')[0]) || 0;
+            const numB = parseInt(b.split('.')[0]) || 0;
+            return numA - numB;
         });
-        return true;
+
+        for (const file of files) {
+            const filePath = path.join(mediaDir, file);
+            await sock.sendMessage(jid, {
+                image: { url: filePath }
+            });
+            await new Promise(resolve => setTimeout(resolve, 1500));
+        }
+        return { success: true, message: `Successfully transmitted ${files.length} media files.` };
     } catch (err) {
         console.error("❌ Media Send Error:", err.message);
-        return false;
+        return { success: false, message: err.message };
     }
 }
 
-// Ensure modules are exported
-module.exports = { connectToWhatsApp, getWhatsAppStatus, resetWhatsApp, getProfilePicUrl, sendAutoWaMessage, sendLocalMedia };
+module.exports = { connectToWhatsApp, getWhatsAppStatus, resetWhatsApp, getProfilePicUrl, sendAutoWaMessage, sendVerificationMedia };
