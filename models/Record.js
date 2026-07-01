@@ -15,17 +15,18 @@ const recordSchema = new mongoose.Schema({
     lastCallReason: { type: String, default: "" },
     remarks: { type: String, default: "" },
     
-    // Default valid JSON array to prevent Android Kotlin crashes
     secondaryData: { type: String, default: "[]" }, 
     
-    // Missing fields added for Android app compatibility
     gender: { type: String, default: "" },
     paidMonths: { type: String, default: "" },
     upcCode: { type: String, default: "" },
-    groupId: { type: String, default: "" }
+    groupId: { type: String, default: "" },
+
+    // 🔥 NEW: Smart Soft Delete Fields
+    isDeleted: { type: Boolean, default: false },
+    deletedAt: { type: Date, default: null }
 }, {
     timestamps: true,
-    // Prevents Mongoose from dropping unknown fields
     strict: false 
 });
 
